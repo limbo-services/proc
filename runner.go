@@ -74,3 +74,9 @@ func TerminateOnSignal(signals ...os.Signal) Runner {
 		return out
 	}
 }
+
+func Multi(runners ...Runner) Runner {
+	return func(ctx context.Context) <-chan error {
+		return Run(ctx, runners...)
+	}
+}
