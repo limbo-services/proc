@@ -13,18 +13,20 @@ import (
 
 func ServeHTTP(addr string, server *http.Server) Runner {
 	return func(ctx context.Context) <-chan error {
-		out := make(chan error)
+		var (
+			wg  = &sync.WaitGroup{}
+			out = make(chan error)
+		)
+
+		server.Handler = httpWaitGroupHandler(wg, server.Handler)
+
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return Error(err)
+		}
+
 		go func() {
 			defer close(out)
-
-			var wg = &sync.WaitGroup{}
-			server.Handler = httpWaitGroupHandler(wg, server.Handler)
-
-			l, err := net.Listen("tcp", addr)
-			if err != nil {
-				out <- err
-				return
-			}
 			defer l.Close()
 
 			go func() {
@@ -51,33 +53,34 @@ func ServeHTTP(addr string, server *http.Server) Runner {
 
 func ServeHTTPS(addr string, server *http.Server) Runner {
 	return func(ctx context.Context) <-chan error {
-		out := make(chan error)
+		var (
+			out = make(chan error)
+			wg  = &sync.WaitGroup{}
+		)
+
+		{ // setup
+			l, err := net.Listen("tcp", ":0")
+			if err != nil {
+				return Error(err)
+			}
+			l.Close()
+			server.Serve(l)
+		}
+
+		config := cloneTLSConfig(server.TLSConfig)
+		if !strSliceContains(config.NextProtos, "http/1.1") {
+			config.NextProtos = append(config.NextProtos, "http/1.1")
+		}
+
+		server.Handler = httpWaitGroupHandler(wg, server.Handler)
+
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return Error(err)
+		}
+
 		go func() {
 			defer close(out)
-
-			{
-				l, err := net.Listen("tcp", ":0")
-				if err != nil {
-					out <- err
-					return
-				}
-				l.Close()
-				server.Serve(l)
-			}
-
-			config := cloneTLSConfig(server.TLSConfig)
-			if !strSliceContains(config.NextProtos, "http/1.1") {
-				config.NextProtos = append(config.NextProtos, "http/1.1")
-			}
-
-			var wg = &sync.WaitGroup{}
-			server.Handler = httpWaitGroupHandler(wg, server.Handler)
-
-			l, err := net.Listen("tcp", addr)
-			if err != nil {
-				out <- err
-				return
-			}
 			defer l.Close()
 
 			go func() {

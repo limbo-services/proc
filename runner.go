@@ -11,24 +11,17 @@ import (
 type Runner func(ctx context.Context) <-chan error
 
 func Run(parentCtx context.Context, runners ...Runner) <-chan error {
-	out := make(chan error)
-	ready := make(chan struct{})
-
 	var (
-		cases       = make([]reflect.SelectCase, len(runners))
-		pending     = len(runners)
+		out         = make(chan error)
+		ready       = make(chan struct{})
+		casesC      = make(chan (<-chan error))
 		ctx, cancel = context.WithCancel(parentCtx)
 	)
 
 	go func() {
-		defer close(ready)
-
-		for i, runner := range runners {
-			errChan := runner(ctx)
-			cases[i] = reflect.SelectCase{
-				Chan: reflect.ValueOf(errChan),
-				Dir:  reflect.SelectRecv,
-			}
+		defer close(casesC)
+		for _, runner := range runners {
+			casesC <- runner(ctx)
 		}
 	}()
 
@@ -36,19 +29,37 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 		defer cancel()
 		defer close(out)
 
-		var isReady bool
+		var (
+			isReady bool
+			pending int
+			cases   = make([]reflect.SelectCase, 0, len(runners)+1)
+		)
 
-		for pending > 0 && isReady {
-			if !isReady {
-				select {
-				case <-ready:
-					isReady = true
-				default:
-				}
-			}
+		cases = append(cases, reflect.SelectCase{
+			Chan: reflect.ValueOf(casesC),
+			Dir:  reflect.SelectRecv,
+		})
 
+		for pending > 0 || !isReady {
 			chosen, recv, recvOK := reflect.Select(cases)
-			// log.Printf("chosen=%v, recv=%v, recvOK=%v", chosen, recv, recvOK)
+
+			if chosen == 0 {
+				if recv.IsValid() && !recv.IsNil() {
+					pending++
+					cases = append(cases, reflect.SelectCase{
+						Chan: recv,
+						Dir:  reflect.SelectRecv,
+					})
+				}
+
+				if !recvOK {
+					cases[chosen].Chan = reflect.Value{}
+					isReady = true
+					close(ready)
+				}
+
+				continue
+			}
 
 			if recv.IsValid() && !recv.IsNil() {
 				// error received
@@ -74,13 +85,11 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 func TerminateOnSignal(signals ...os.Signal) Runner {
 	return func(ctx context.Context) <-chan error {
 		out := make(chan error)
+		c := make(chan os.Signal)
+		signal.Notify(c, signals...)
 		go func() {
 			defer close(out)
-
-			c := make(chan os.Signal)
 			defer close(c)
-
-			go signal.Notify(c, signals...)
 			defer signal.Stop(c)
 
 			select {
