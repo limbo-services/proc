@@ -12,16 +12,16 @@ type Runner func(ctx context.Context) <-chan error
 
 func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 	out := make(chan error)
+	ready := make(chan struct{})
+
+	var (
+		cases       = make([]reflect.SelectCase, len(runners))
+		pending     = len(runners)
+		ctx, cancel = context.WithCancel(parentCtx)
+	)
+
 	go func() {
-		defer close(out)
-
-		var (
-			cases   = make([]reflect.SelectCase, len(runners))
-			pending = len(runners)
-		)
-
-		ctx, cancel := context.WithCancel(parentCtx)
-		defer cancel()
+		defer close(ready)
 
 		for i, runner := range runners {
 			errChan := runner(ctx)
@@ -30,8 +30,23 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 				Dir:  reflect.SelectRecv,
 			}
 		}
+	}()
 
-		for pending > 0 {
+	go func() {
+		defer cancel()
+		defer close(out)
+
+		var isReady bool
+
+		for pending > 0 && isReady {
+			if !isReady {
+				select {
+				case <-ready:
+					isReady = true
+				default:
+				}
+			}
+
 			chosen, recv, recvOK := reflect.Select(cases)
 			// log.Printf("chosen=%v, recv=%v, recvOK=%v", chosen, recv, recvOK)
 
@@ -51,6 +66,8 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 			}
 		}
 	}()
+
+	<-ready
 	return out
 }
 
