@@ -80,3 +80,12 @@ func Multi(runners ...Runner) Runner {
 		return Run(ctx, runners...)
 	}
 }
+
+func Error(err error) <-chan error {
+	c := make(chan error, 1)
+	if err != nil {
+		c <- err
+	}
+	close(c)
+	return c
+}
