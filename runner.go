@@ -1,4 +1,4 @@
-package proc
+package proc // import "limbo.services/proc"
 
 import (
 	"os"
@@ -30,7 +30,6 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 		defer close(out)
 
 		var (
-			isReady bool
 			pending int
 			cases   = make([]reflect.SelectCase, 0, len(runners)+1)
 		)
@@ -40,7 +39,12 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 			Dir:  reflect.SelectRecv,
 		})
 
-		for pending > 0 || !isReady {
+		for {
+
+			if pending <= 0 && !cases[0].Chan.IsValid() {
+				return
+			}
+
 			chosen, recv, recvOK := reflect.Select(cases)
 
 			if chosen == 0 {
@@ -54,7 +58,6 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 
 				if !recvOK {
 					cases[chosen].Chan = reflect.Value{}
-					isReady = true
 					close(ready)
 				}
 
