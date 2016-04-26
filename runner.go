@@ -1,4 +1,4 @@
-package proc
+package proc // import "limbo.services/proc"
 
 import (
 	"os"
@@ -14,7 +14,7 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 	var (
 		out         = make(chan error)
 		ready       = make(chan struct{})
-		casesC      = make(chan (<-chan error))
+		casesC      = make(chan (<-chan error), len(runners))
 		ctx, cancel = context.WithCancel(parentCtx)
 	)
 
@@ -25,12 +25,11 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 		}
 	}()
 
-	go func() {
+	go func(out chan<- error) {
 		defer cancel()
 		defer close(out)
 
 		var (
-			isReady bool
 			pending int
 			cases   = make([]reflect.SelectCase, 0, len(runners)+1)
 		)
@@ -40,7 +39,12 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 			Dir:  reflect.SelectRecv,
 		})
 
-		for pending > 0 || !isReady {
+		for {
+
+			if pending <= 0 && !cases[0].Chan.IsValid() {
+				return
+			}
+
 			chosen, recv, recvOK := reflect.Select(cases)
 
 			if chosen == 0 {
@@ -54,7 +58,6 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 
 				if !recvOK {
 					cases[chosen].Chan = reflect.Value{}
-					isReady = true
 					close(ready)
 				}
 
@@ -76,9 +79,38 @@ func Run(parentCtx context.Context, runners ...Runner) <-chan error {
 				pending--
 			}
 		}
-	}()
+	}(out)
 
-	<-ready
+	// buffer boot errors
+	var bootErrors []error
+BOOT_LOOP:
+	for {
+		select {
+		case <-ready:
+			break BOOT_LOOP
+		case err, ok := <-out:
+			if !ok {
+				out = nil
+			}
+			if err != nil {
+				bootErrors = append(bootErrors, err)
+			}
+		}
+	}
+	if len(bootErrors) > 0 {
+		in := out
+		out = make(chan error, len(bootErrors))
+		for _, err := range bootErrors {
+			out <- err
+		}
+		go func(out chan<- error, in <-chan error) {
+			defer close(out)
+			for err := range in {
+				out <- err
+			}
+		}(out, in)
+	}
+
 	return out
 }
 
