@@ -105,8 +105,10 @@ BOOT_LOOP:
 		}
 		go func(out chan<- error, in <-chan error) {
 			defer close(out)
-			for err := range in {
-				out <- err
+			if in != nil {
+				for err := range in {
+					out <- err
+				}
 			}
 		}(out, in)
 	}
