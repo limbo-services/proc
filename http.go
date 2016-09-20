@@ -58,16 +58,10 @@ func ServeHTTPS(addr string, server *http.Server) Runner {
 			wg  = &sync.WaitGroup{}
 		)
 
-		{ // setup
-			l, err := net.Listen("tcp", ":0")
-			if err != nil {
-				return Error(err)
-			}
-			l.Close()
-			server.Serve(l)
+		config := server.TLSConfig
+		if !strSliceContains(config.NextProtos, "h2") {
+			config.NextProtos = append(config.NextProtos, "h2")
 		}
-
-		config := cloneTLSConfig(server.TLSConfig)
 		if !strSliceContains(config.NextProtos, "http/1.1") {
 			config.NextProtos = append(config.NextProtos, "http/1.1")
 		}
